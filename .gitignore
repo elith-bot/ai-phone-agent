@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+logs/
+agent.pid
+.DS_Store
+*.zip

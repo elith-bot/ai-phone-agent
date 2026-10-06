@@ -1,0 +1,2 @@
+# اختياري فقط عند اختيار AI_PROVIDER=openai
+openai>=1.50,<2
