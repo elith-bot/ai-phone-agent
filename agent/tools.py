@@ -3,7 +3,8 @@ import os
 import re
 from pathlib import Path
 
-DANGEROUS = re.compile(r"(^|[;&|])\s*(rm|mv|dd|mkfs|format|su|sudo|chmod\s+777|reboot|shutdown)\b|>\s*/|curl[^|]*\|\s*(sh|bash)", re.I)
+DELETE = re.compile(r"(^|[;&|()]|\s)(rm|rmdir|unlink|shred|truncate)\b|find\s+[^\n]*\s-delete\b|git\s+clean\s+-[a-z]*f", re.I)
+HARD_BLOCK = re.compile(r"(^|[;&|])\s*(dd|mkfs|format|su|sudo|chmod\s+777|reboot|shutdown)\b|:\(\)\s*\{\s*:\|:&\s*\};:|curl[^|]*\|\s*(sh|bash)", re.I)
 
 
 def workspace() -> Path:
@@ -16,9 +17,13 @@ def validate_command(command: str) -> str | None:
     command = command.strip()
     if not command or len(command) > 1000:
         return "الأمر فارغ أو طويل جدًا."
-    if DANGEROUS.search(command):
-        return "هذا الأمر مصنف كخطر ويحتاج مراجعة يدوية."
+    if HARD_BLOCK.search(command):
+        return "هذا الأمر محظور لحماية الهاتف."
     return None
+
+
+def is_delete_command(command: str) -> bool:
+    return bool(DELETE.search(command))
 
 
 async def run_shell(command: str) -> tuple[int, str]:

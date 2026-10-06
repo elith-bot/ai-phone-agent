@@ -3,14 +3,14 @@ import logging
 import os
 import secrets
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from .providers import ask_model
-from .tools import run_shell, validate_command, workspace
+from .tools import run_shell, validate_command, workspace, is_delete_command
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-PENDING: dict[int, tuple[str, str]] = {}
+PENDING: dict[str, tuple[int, list[str]]] = {}
 
 
 def allowed(update: Update) -> bool:
@@ -19,13 +19,13 @@ def allowed(update: Update) -> bool:
 
 
 async def deny(update: Update):
-    await update.effective_message.reply_text("غير مصرح. شغّل /id أولًا لمعرفة رقم حسابك ثم ضعه في .env وأعد التشغيل.")
+    await update.effective_message.reply_text("غير مصرح بهذا الحساب.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
-    await update.message.reply_text("أهلًا. أنا وكيلك المحلي داخل Termux. أرسل طلبًا أو استخدم /status و /cancel.")
+    await update.message.reply_text("أهلًا. أنفذ المهام العادية تلقائيًا، وأطلب موافقة بزر واحد قبل حذف الملفات. أرسل /status للمعلومات.")
 
 
 async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,40 +35,83 @@ async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
-    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: {os.getenv('AGENT_MODE','safe')}\nالمساحة: {workspace()}")
+    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: full-with-delete-approval\nالمساحة: {workspace()}")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    PENDING.pop(update.effective_user.id, None)
-    await update.message.reply_text("تم إلغاء العملية المعلقة.")
+    if not allowed(update):
+        return await deny(update)
+    removed = len(PENDING)
+    PENDING.clear()
+    await update.message.reply_text(f"تم إلغاء {removed} عملية حذف معلقة.")
+
+
+async def execute_commands(update: Update, commands: list[str]):
+    results = []
+    for index, command in enumerate(commands, 1):
+        code, output = await run_shell(command)
+        results.append(f"الخطوة {index} ({code})\n$ {command}\n{output or 'تم التنفيذ بلا مخرجات'}")
+        if code != 0:
+            results.append("توقفت المهمة لأن هذه الخطوة فشلت.")
+            break
+    text = "\n\n".join(results)
+    await update.effective_message.reply_text(f"اكتملت المهمة:\n\n{text}"[-9000:])
+
+
+async def approve_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not allowed(update):
+        await query.answer("غير مصرح", show_alert=True)
+        return
+    await query.answer()
+    action, request_id = query.data.split(":", 1)
+    pending = PENDING.pop(request_id, None)
+    if not pending:
+        return await query.edit_message_text("انتهت صلاحية هذه الموافقة أو أُلغيت.")
+    _, commands = pending
+    if action == "reject":
+        return await query.edit_message_text("تم رفض العملية.")
+    await query.edit_message_text("تمت الموافقة. بدأ تنفيذ المهمة...")
+    await execute_commands(update, commands)
 
 
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
-    uid = update.effective_user.id
     text = update.message.text.strip()
-    if text.startswith("/confirm "):
-        token = text.split(maxsplit=1)[1]
-        pending = PENDING.pop(uid, None)
-        if not pending or not secrets.compare_digest(token, pending[0]):
-            return await update.message.reply_text("رمز التأكيد غير صالح أو منتهي.")
-        code, output = await run_shell(pending[1])
-        return await update.message.reply_text(f"النتيجة ({code}):\n{output or 'تم التنفيذ بلا مخرجات'}")
     try:
         plan = await ask_model(text)
     except Exception as exc:
         logging.exception("model failure")
         return await update.message.reply_text(f"تعذر الاتصال بالنموذج: {exc}")
-    if plan.get("kind") != "shell":
+    kind = plan.get("kind")
+    if kind == "answer":
         return await update.message.reply_text(str(plan.get("text", "لم أفهم الطلب."))[:4000])
-    command = str(plan.get("command", "")).strip()
-    reason = str(plan.get("reason", ""))
-    if validate_command(command):
-        return await update.message.reply_text("رفضت الأمر: أمر خطر أو غير صالح. استخدمه يدويًا بعد مراجعته.")
-    token = secrets.token_urlsafe(6)
-    PENDING[uid] = (token, command)
-    await update.message.reply_text(f"سيُنفذ داخل {workspace()}:\n`{command}`\nالسبب: {reason}\n\nللتأكيد أرسل: /confirm {token}\nأو /cancel", parse_mode="Markdown")
+    if kind == "shell":
+        commands = [str(plan.get("command", "")).strip()]
+    elif kind == "batch":
+        commands = [str(item).strip() for item in plan.get("commands", []) if str(item).strip()]
+    else:
+        return await update.message.reply_text("لم أفهم نوع المهمة التي اقترحها النموذج.")
+    if not commands or any(validate_command(command) for command in commands):
+        return await update.message.reply_text("رفضت المهمة لأنها فارغة أو غير صالحة.")
+    delete_needed = any(is_delete_command(command) for command in commands)
+    if delete_needed:
+        request_id = secrets.token_urlsafe(8)
+        PENDING[request_id] = (update.effective_user.id, commands)
+        preview = "\n".join(f"{i}. `{command}`" for i, command in enumerate(commands, 1))
+        keyboard = [[
+            InlineKeyboardButton("موافقة على الحذف", callback_data=f"approve:{request_id}"),
+            InlineKeyboardButton("إلغاء", callback_data=f"reject:{request_id}"),
+        ]]
+        return await update.message.reply_text(
+            f"هذه المهمة تتضمن حذفًا:\n{preview}\n\nهل توافق؟",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    # المهام العادية تبدأ فورًا؛ يمكن استقبال مهام أخرى بالتوازي.
+    asyncio.create_task(execute_commands(update, commands))
+    await update.message.reply_text(f"بدأت تنفيذ {len(commands)} خطوة تلقائيًا داخل {workspace()}. سأرسل النتيجة عند الانتهاء.")
 
 
 async def async_main():
@@ -80,8 +123,8 @@ async def async_main():
     app.add_handler(CommandHandler("id", user_id))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CallbackQueryHandler(approve_delete, pattern=r"^(approve|reject):"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
-    app.add_handler(MessageHandler(filters.Regex(r"^/confirm "), message))
     await app.initialize()
     await app.start()
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
