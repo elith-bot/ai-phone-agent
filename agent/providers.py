@@ -11,8 +11,21 @@ SYSTEM_PROMPT = '''أنت وكيل محلي على هاتف Android داخل Ter
 لتنفيذ عدة خطوات مترابطة أعد:
 {"kind":"batch","commands":["الأمر الأول","الأمر الثاني"],"reason":"..."}
 لا تضع Markdown خارج JSON. لا تنفذ الأدوات بنفسك.
-للمهام البرمجية استخدم مسارات واضحة. لا تضع الأسرار في الأوامر أو المخرجات.
+لِلمهام البرمجية استخدم مسارات واضحة. لا تضع الأسرار في الأوامر أو المخرجات.
+مهم: يجب أن يكون ردك كائن JSON صالحًا، وأن تكون kind إحدى: answer أو shell أو batch.
 '''
+
+RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "kind": {"type": "STRING", "enum": ["answer", "shell", "batch"]},
+        "text": {"type": "STRING"},
+        "command": {"type": "STRING"},
+        "commands": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "reason": {"type": "STRING"},
+    },
+    "required": ["kind"],
+}
 
 
 def _json_from_text(text: str) -> dict[str, Any]:
@@ -26,14 +39,14 @@ def _json_from_text(text: str) -> dict[str, Any]:
         return {"kind": "answer", "text": text}
 
 
-async def _gemini(user_text: str) -> dict[str, Any]:
+async def _gemini(user_text: str, context: str = "") -> dict[str, Any]:
     model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     key = os.environ["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
-        "generationConfig": {"responseMimeType": "application/json"},
+        "contents": [{"role": "user", "parts": [{"text": f"السياق المحفوظ:\n{context}\n\nالطلب الحالي:\n{user_text}"}]}],
+        "generationConfig": {"responseMimeType": "application/json", "responseSchema": RESPONSE_SCHEMA},
     }
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(url, params={"key": key}, json=body)
@@ -43,10 +56,10 @@ async def _gemini(user_text: str) -> dict[str, Any]:
     return _json_from_text(text)
 
 
-async def ask_model(user_text: str) -> dict[str, Any]:
+async def ask_model(user_text: str, context: str = "") -> dict[str, Any]:
     provider = os.getenv("AI_PROVIDER", "gemini").lower()
     if provider == "gemini":
-        return await _gemini(user_text)
+        return await _gemini(user_text, context)
     if provider in {"openai", "local"}:
         from openai import AsyncOpenAI
         if provider == "local":

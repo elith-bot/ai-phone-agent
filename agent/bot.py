@@ -7,6 +7,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from .providers import ask_model
 from .tools import run_shell, validate_command, workspace, is_delete_command
+from .memory import add_memory, add_message, get_context, init_db, stats
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -35,7 +36,15 @@ async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
-    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: full-with-delete-approval\nالمساحة: {workspace()}")
+    messages, memories = stats(update.effective_user.id)
+    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: full-with-delete-approval\nالمساحة: {workspace()}\nالذاكرة: {messages} رسالة، {memories} ذاكرة")
+
+
+async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return await deny(update)
+    messages, memories = stats(update.effective_user.id)
+    await update.message.reply_text(f"الذاكرة محفوظة محليًا في SQLite.\nالرسائل: {messages}\nالذكريات: {memories}\nالسياق الحديث يُعاد تلقائيًا مع كل طلب.")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -55,6 +64,7 @@ async def execute_commands(update: Update, commands: list[str]):
             results.append("توقفت المهمة لأن هذه الخطوة فشلت.")
             break
     text = "\n\n".join(results)
+    add_message(update.effective_user.id, "tool", text)
     await update.effective_message.reply_text(f"اكتملت المهمة:\n\n{text}"[-9000:])
 
 
@@ -79,20 +89,28 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
     text = update.message.text.strip()
+    add_message(update.effective_user.id, "user", text)
+    saved_context = get_context(update.effective_user.id)
     try:
-        plan = await ask_model(text)
+        plan = await ask_model(text, saved_context)
     except Exception as exc:
         logging.exception("model failure")
         return await update.message.reply_text(f"تعذر الاتصال بالنموذج: {exc}")
     kind = plan.get("kind")
+    if kind == "answer" and ("JSON" in str(plan.get("text", "")) or "وكيل" in str(plan.get("text", ""))) and any(word in text for word in ("أنشئ", "اعمل", "سوي", "اكتب", "برمج", "نفذ")):
+        plan = await ask_model("حوّل الطلب إلى خطة تنفيذ فعلية، ولا تشرح الصيغة: " + text, saved_context)
+        kind = plan.get("kind")
     if kind == "answer":
-        return await update.message.reply_text(str(plan.get("text", "لم أفهم الطلب."))[:4000])
+        answer = str(plan.get("text", "لم أفهم الطلب."))[:4000]
+        add_message(update.effective_user.id, "assistant", answer)
+        return await update.message.reply_text(answer)
     if kind == "shell":
         commands = [str(plan.get("command", "")).strip()]
     elif kind == "batch":
         commands = [str(item).strip() for item in plan.get("commands", []) if str(item).strip()]
     else:
         return await update.message.reply_text("لم أفهم نوع المهمة التي اقترحها النموذج.")
+    add_message(update.effective_user.id, "assistant", str(plan)[:12000])
     if not commands or any(validate_command(command) for command in commands):
         return await update.message.reply_text("رفضت المهمة لأنها فارغة أو غير صالحة.")
     delete_needed = any(is_delete_command(command) for command in commands)
@@ -118,10 +136,12 @@ async def async_main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise SystemExit("ضع TELEGRAM_BOT_TOKEN في ملف .env")
+    init_db()
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", user_id))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("memory", memory_status))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(approve_delete, pattern=r"^(approve|reject):"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
