@@ -1,6 +1,7 @@
 import json
 import os
 from typing import Any
+import httpx
 
 SYSTEM_PROMPT = '''أنت وكيل محلي على هاتف Android داخل Termux. أجب بالعربية باختصار.
 لا تنفذ أدوات بنفسك. عندما يطلب المستخدم تنفيذ أمر طرفية، أعد JSON فقط بهذا الشكل:
@@ -22,18 +23,27 @@ def _json_from_text(text: str) -> dict[str, Any]:
         return {"kind": "answer", "text": text}
 
 
+async def _gemini(user_text: str) -> dict[str, Any]:
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    key = os.environ["GEMINI_API_KEY"]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    body = {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(url, params={"key": key}, json=body)
+        response.raise_for_status()
+    data = response.json()
+    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    return _json_from_text(text)
+
+
 async def ask_model(user_text: str) -> dict[str, Any]:
     provider = os.getenv("AI_PROVIDER", "gemini").lower()
-    prompt = SYSTEM_PROMPT + "\nطلب المستخدم:\n" + user_text
     if provider == "gemini":
-        from google import genai
-        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        response = await client.aio.models.generate_content(
-            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-            contents=prompt,
-            config={"response_mime_type": "application/json"},
-        )
-        return _json_from_text(response.text or "{}")
+        return await _gemini(user_text)
     if provider in {"openai", "local"}:
         from openai import AsyncOpenAI
         if provider == "local":
