@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Any
@@ -8,21 +9,27 @@ SYSTEM_PROMPT = '''أنت وكيل محلي على هاتف Android داخل Ter
 {"kind":"answer","text":"..."}
 لتنفيذ أمر واحد أعد:
 {"kind":"shell","command":"...","reason":"..."}
-لتنفيذ عدة خطوات مترابطة أعد:
+لتَنفيذ عدة خطوات مترابطة أعد:
 {"kind":"batch","commands":["الأمر الأول","الأمر الثاني"],"reason":"..."}
+لعمليات الملفات المنظمة، فضّل أداة واحدة بهذا الشكل:
+{"kind":"tool","tool":"filesystem.create|filesystem.read|filesystem.update|filesystem.search|filesystem.delete|terminal.run","arguments":{},"reason":"..."}
 لا تضع Markdown خارج JSON. لا تنفذ الأدوات بنفسك.
 لِلمهام البرمجية استخدم مسارات واضحة. لا تضع الأسرار في الأوامر أو المخرجات.
-مهم: يجب أن يكون ردك كائن JSON صالحًا، وأن تكون kind إحدى: answer أو shell أو batch.
+مهم: يجب أن يكون ردك كائن JSON صالحًا، وأن تكون kind إحدى: answer أو shell أو batch أو tool.
+ذاكرة الهاتف المشتركة في Termux هي ~/storage/shared، ومجلد التنزيلات هو ~/storage/shared/Download.
+إذا طلب المستخدم مجلدًا بجانب Download فاستخدم ~/storage/shared/اسم_المجلد، ولا تستخدم ~/storage/اسم_المجلد.
 '''
 
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
     "properties": {
-        "kind": {"type": "STRING", "enum": ["answer", "shell", "batch"]},
+        "kind": {"type": "STRING", "enum": ["answer", "shell", "batch", "tool"]},
         "text": {"type": "STRING"},
         "command": {"type": "STRING"},
         "commands": {"type": "ARRAY", "items": {"type": "STRING"}},
         "reason": {"type": "STRING"},
+        "tool": {"type": "STRING"},
+        "arguments": {"type": "OBJECT"},
     },
     "required": ["kind"],
 }
@@ -49,7 +56,15 @@ async def _gemini(user_text: str, context: str = "") -> dict[str, Any]:
         "generationConfig": {"responseMimeType": "application/json", "responseSchema": RESPONSE_SCHEMA},
     }
     async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(url, params={"key": key}, json=body)
+        response = None
+        for attempt in range(3):
+            response = await client.post(url, params={"key": key}, json=body)
+            if response.status_code != 429:
+                break
+            await asyncio.sleep(2 ** attempt)
+        if response is not None and response.status_code == 429:
+            raise RuntimeError("Gemini مشغول أو تجاوز حد الطلبات (429). انتظر قليلًا أو استخدم مفتاحًا/مزودًا آخر.")
+        assert response is not None
         response.raise_for_status()
     data = response.json()
     text = data["candidates"][0]["content"]["parts"][0]["text"]

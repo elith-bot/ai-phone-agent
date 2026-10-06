@@ -2,12 +2,14 @@ import asyncio
 import logging
 import os
 import secrets
+import shlex
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from .providers import ask_model
 from .tools import run_shell, validate_command, workspace, is_delete_command
 from .memory import add_memory, add_message, get_context, init_db, stats
+from .tool_registry import execute_tool
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -45,6 +47,16 @@ async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await deny(update)
     messages, memories = stats(update.effective_user.id)
     await update.message.reply_text(f"الذاكرة محفوظة محليًا في SQLite.\nالرسائل: {messages}\nالذكريات: {memories}\nالسياق الحديث يُعاد تلقائيًا مع كل طلب.")
+
+
+async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return await deny(update)
+    content = " ".join(context.args).strip()
+    if not content:
+        return await update.message.reply_text("استخدم: /remember اسمي ليث وأهتم ببرمجة ألعاب HTML")
+    add_memory(update.effective_user.id, content)
+    await update.message.reply_text("تم حفظها في الذاكرة الدائمة المحلية.")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -90,6 +102,8 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await deny(update)
     text = update.message.text.strip()
     add_message(update.effective_user.id, "user", text)
+    if text.startswith(("تذكر أن", "احفظ أن", "لا تنس أن")):
+        add_memory(update.effective_user.id, text.split(" ", 2)[-1])
     saved_context = get_context(update.effective_user.id)
     try:
         plan = await ask_model(text, saved_context)
@@ -104,7 +118,24 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = str(plan.get("text", "لم أفهم الطلب."))[:4000]
         add_message(update.effective_user.id, "assistant", answer)
         return await update.message.reply_text(answer)
-    if kind == "shell":
+    if kind == "tool":
+        tool_name = str(plan.get("tool", ""))
+        arguments = plan.get("arguments") or {}
+        if tool_name == "filesystem.delete":
+            commands = [f"rm -rf -- {shlex.quote(str(arguments.get('path', '')))}"]
+        elif tool_name == "terminal.run":
+            commands = [str(arguments.get("command", "")).strip()]
+        else:
+            async def run_registered_tool():
+                try:
+                    result = await execute_tool(tool_name, arguments)
+                    add_message(update.effective_user.id, "tool", result)
+                    await update.effective_message.reply_text(result[-9000:])
+                except Exception as exc:
+                    await update.effective_message.reply_text(f"فشل تنفيذ الأداة: {exc}")
+            asyncio.create_task(run_registered_tool())
+            return await update.message.reply_text(f"بدأت أداة {tool_name} تلقائيًا.")
+    elif kind == "shell":
         commands = [str(plan.get("command", "")).strip()]
     elif kind == "batch":
         commands = [str(item).strip() for item in plan.get("commands", []) if str(item).strip()]
@@ -142,6 +173,7 @@ async def async_main():
     app.add_handler(CommandHandler("id", user_id))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("memory", memory_status))
+    app.add_handler(CommandHandler("remember", remember))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(approve_delete, pattern=r"^(approve|reject):"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))

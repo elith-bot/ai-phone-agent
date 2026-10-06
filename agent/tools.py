@@ -27,6 +27,8 @@ def is_delete_command(command: str) -> bool:
 
 
 async def run_shell(command: str) -> tuple[int, str]:
+    # في Termux: ~/storage/shared هو ذاكرة الهاتف المشتركة؛ ~/storage وحده ليس كذلك.
+    command = re.sub(r"~/storage/(?!shared/)", "~/storage/shared/", command)
     error = validate_command(command)
     if error:
         return 126, error
