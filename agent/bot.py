@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import secrets
@@ -70,7 +71,7 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"سيُنفذ داخل {workspace()}:\n`{command}`\nالسبب: {reason}\n\nللتأكيد أرسل: /confirm {token}\nأو /cancel", parse_mode="Markdown")
 
 
-def main():
+async def async_main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise SystemExit("ضع TELEGRAM_BOT_TOKEN في ملف .env")
@@ -81,7 +82,19 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_handler(MessageHandler(filters.Regex(r"^/confirm "), message))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+
+def main():
+    asyncio.run(async_main())
 
 
 if __name__ == "__main__":
