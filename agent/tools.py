@@ -13,6 +13,12 @@ def workspace() -> Path:
     return root
 
 
+def phone_workspace() -> Path:
+    root = Path(os.getenv("PHONE_WORKSPACE_DIR", str(Path.home() / "storage" / "shared" / "AI_Workspace"))).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def validate_command(command: str) -> str | None:
     command = command.strip()
     if not command or len(command) > 1000:

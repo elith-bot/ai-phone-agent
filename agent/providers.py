@@ -16,8 +16,9 @@ SYSTEM_PROMPT = '''أنت وكيل محلي على هاتف Android داخل Ter
 لا تضع Markdown خارج JSON. لا تنفذ الأدوات بنفسك.
 لِلمهام البرمجية استخدم مسارات واضحة. لا تضع الأسرار في الأوامر أو المخرجات.
 مهم: يجب أن يكون ردك كائن JSON صالحًا، وأن تكون kind إحدى: answer أو shell أو batch أو tool.
-ذاكرة الهاتف المشتركة في Termux هي ~/storage/shared، ومجلد التنزيلات هو ~/storage/shared/Download.
-إذا طلب المستخدم مجلدًا بجانب Download فاستخدم ~/storage/shared/اسم_المجلد، ولا تستخدم ~/storage/اسم_المجلد.
+مجلد ملفات المستخدم الافتراضي هو PHONE_WORKSPACE_DIR، ويظهر في الهاتف باسم AI_Workspace. عند إنشاء HTML أو ملفات أو مجلدات للمستخدم استخدم هذا المجلد إذا لم يحدد مسارًا آخر.
+جذر ذاكرة الهاتف هو PHONE_STORAGE_ROOT، ومجلد التنزيلات تحته باسم Download، ومجلد الصور باسم Pictures.
+إذا طلب المستخدم مجلدًا بجانب Download فاستخدم PHONE_STORAGE_ROOT/اسم_المجلد. لا تستخدم مجلد Termux الداخلي لملفات المستخدم إلا إذا طلب ذلك صراحة.
 '''
 
 RESPONSE_SCHEMA = {"type": "OBJECT", "properties": {"kind": {"type": "STRING", "enum": ["answer", "shell", "batch", "tool"]}, "text": {"type": "STRING"}, "command": {"type": "STRING"}, "commands": {"type": "ARRAY", "items": {"type": "STRING"}}, "reason": {"type": "STRING"}, "tool": {"type": "STRING"}, "arguments": {"type": "OBJECT"}}, "required": ["kind"]}

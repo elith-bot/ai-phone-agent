@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from .providers import ask_model
-from .tools import run_shell, validate_command, workspace, is_delete_command
+from .tools import phone_workspace, run_shell, validate_command, workspace, is_delete_command
 from .memory import add_memory, add_message, get_context, init_db, stats
 from .tool_registry import execute_tool
 from .model_router import ModelRouter
@@ -45,7 +45,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
     messages, memories = stats(update.effective_user.id)
-    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: full-with-delete-approval\nالمساحة: {workspace()}\nالذاكرة: {messages} رسالة، {memories} ذاكرة")
+    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: full-with-delete-approval\nمساحة التنفيذ: {workspace()}\nملفات المستخدم: {phone_workspace()}\nالذاكرة: {messages} رسالة، {memories} ذاكرة")
 
 
 async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
