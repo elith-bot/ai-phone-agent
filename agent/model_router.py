@@ -8,6 +8,7 @@ class ModelRouter:
         self.used_today = defaultdict(int)
         self.used_minute = defaultdict(list)
         self.health = {item.key: True for item in get_catalog()}
+        self.cooldown_until = defaultdict(float)
 
     def classify(self, text: str, media: str | None = None) -> dict[str, object]:
         value = (text or "").lower()
@@ -28,7 +29,7 @@ class ModelRouter:
         exclude = exclude or set()
         candidates = []
         for item in get_catalog():
-            if item.key in exclude or not item.enabled or not self.health.get(item.key, True):
+            if item.key in exclude or not item.enabled or not self.health.get(item.key, True) or time.time() < self.cooldown_until[item.key]:
                 continue
             if info["kind"] == "web":
                 required = "text"
@@ -58,9 +59,26 @@ class ModelRouter:
 
     def mark_health(self, model: ModelSpec, healthy: bool) -> None:
         self.health[model.key] = healthy
+        if healthy:
+            self.cooldown_until[model.key] = 0
+
+    def mark_failure(self, model: ModelSpec, cooldown_seconds: int = 60) -> None:
+        self.health[model.key] = False
+        self.cooldown_until[model.key] = time.time() + cooldown_seconds
+
+    def recover_due_models(self) -> None:
+        now = time.time()
+        for key, until in list(self.cooldown_until.items()):
+            if until and now >= until:
+                self.health[key] = True
+                self.cooldown_until[key] = 0
 
     def status(self) -> list[dict[str, object]]:
+        self.recover_due_models()
         rows = []
         for item in get_catalog():
-            rows.append(item.public(self.used_today[item.key], len(self.used_minute[item.key]), self.health[item.key]))
+            healthy = self.health[item.key] and time.time() >= self.cooldown_until[item.key]
+            row = item.public(self.used_today[item.key], len(self.used_minute[item.key]), healthy)
+            row["cooldown_seconds"] = max(0, int(self.cooldown_until[item.key] - time.time()))
+            rows.append(row)
         return rows

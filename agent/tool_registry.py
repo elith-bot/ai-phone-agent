@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 from .tools import run_shell
+from .adb_tools import adb_devices, ui_dump, ui_find, adb_tap
 
 
 def shared_root() -> Path:
@@ -12,7 +13,11 @@ def shared_root() -> Path:
 
 def resolve_path(raw: str) -> Path:
     value = str(raw).strip()
-    if value.startswith("~/storage/") and not value.startswith("~/storage/shared/"):
+    value = value.replace("/storage/emulated/0", "~/storage/shared", 1)
+    value = value.replace("/sdcard", "~/storage/shared", 1)
+    if value.startswith("~/storage/shared/shared"):
+        value = value.replace("~/storage/shared/shared", "~/storage/shared", 1)
+    elif value.startswith("~/storage/") and not value.startswith("~/storage/shared"):
         value = value.replace("~/storage/", "~/storage/shared/", 1)
     path = Path(value).expanduser().resolve()
     roots = [Path(os.getenv("WORKSPACE_DIR", Path.home() / "agent-workspace")).expanduser().resolve(), shared_root()]
@@ -26,6 +31,14 @@ def _text(value: Any) -> str:
 
 
 async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+    if name == "adb.devices":
+        return await adb_devices()
+    if name == "adb.ui_dump":
+        return await ui_dump()
+    if name == "adb.ui_find":
+        return await ui_find(_text(arguments.get("query")))
+    if name == "adb.tap":
+        return await adb_tap(_text(arguments.get("query")), _text(arguments.get("y")) or None)
     if name == "terminal.run":
         code, output = await run_shell(_text(arguments.get("command")))
         return f"النتيجة ({code}):\n{output or 'تم التنفيذ بلا مخرجات'}"
@@ -41,9 +54,14 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         root = resolve_path(_text(arguments.get("path", "~/storage/shared")))
         pattern = _text(arguments.get("pattern", "*"))
         content = _text(arguments.get("content"))
+        limit = max(1, min(int(arguments.get("limit", 200)), 500))
+        newest = bool(arguments.get("newest", False))
+        exclude_thumbnails = bool(arguments.get("exclude_thumbnails", True))
         found = []
         for path in root.rglob("*"):
             if not path.is_file() or not fnmatch.fnmatch(path.name, pattern):
+                continue
+            if exclude_thumbnails and ".thumbnails" in path.parts:
                 continue
             if content:
                 try:
@@ -52,8 +70,9 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
                 except OSError:
                     continue
             found.append(str(path))
-            if len(found) >= 200:
-                break
+        if newest:
+            found.sort(key=lambda item: Path(item).stat().st_mtime, reverse=True)
+        found = found[:limit]
         return "\n".join(found) or "لا توجد نتائج."
     if name == "filesystem.delete":
         path = resolve_path(_text(arguments.get("path")))

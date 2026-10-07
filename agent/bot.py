@@ -96,8 +96,7 @@ async def execute_commands(update: Update, commands: list[str]):
         code, output = await run_shell(command)
         results.append(f"الخطوة {index} ({code})\n$ {command}\n{output or 'تم التنفيذ بلا مخرجات'}")
         if code != 0:
-            results.append("توقفت المهمة لأن هذه الخطوة فشلت.")
-            break
+            results.append("فشلت هذه الخطوة، لكن سأتابع بقية خطوات المهمة.")
     text = "\n\n".join(results)
     add_message(update.effective_user.id, "tool", text)
     await update.effective_message.reply_text(f"اكتملت المهمة:\n\n{text}"[-9000:])
@@ -127,22 +126,35 @@ async def process_text(update: Update, text: str):
     if text.startswith(("تذكر أن", "احفظ أن", "لا تنس أن")):
         add_memory(update.effective_user.id, text.split(" ", 2)[-1])
     saved_context = get_context(update.effective_user.id)
-    try:
-        model, request_info = ROUTER.choose(text)
-        ROUTER.mark_started(model)
-        plan = await ask_model(text, saved_context, provider=model.provider, model=model.model_id)
-    except Exception as exc:
-        logging.exception("model failure")
+    tried = set()
+    last_error = None
+    active_model = None
+    plan = None
+    for _ in range(6):
         try:
-            fallback, _ = ROUTER.choose(text, exclude={model.key} if 'model' in locals() else set())
-            ROUTER.mark_started(fallback)
-            plan = await ask_model(text, saved_context, provider=fallback.provider, model=fallback.model_id)
-            await update.message.reply_text(f"استخدمت النموذج الاحتياطي: {fallback.key}")
-        except Exception:
-            return await update.message.reply_text(f"تعذر الاتصال بالنماذج حاليًا: {exc}")
+            active_model, request_info = ROUTER.choose(text, exclude=tried)
+        except Exception as exc:
+            last_error = exc
+            break
+        tried.add(active_model.key)
+        ROUTER.mark_started(active_model)
+        try:
+            plan = await ask_model(text, saved_context, provider=active_model.provider, model=active_model.model_id)
+            if len(tried) > 1:
+                await update.message.reply_text(f"تم التحويل تلقائيًا إلى النموذج المتاح: {active_model.key}")
+            break
+        except Exception as exc:
+            last_error = exc
+            logging.warning("model %s failed: %s", active_model.key, exc)
+            ROUTER.mark_failure(active_model, 90)
+            plan = None
+    else:
+        plan = None
+    if plan is None:
+        return await update.message.reply_text(f"تعذر الاتصال بالنماذج حاليًا بعد تجربة {len(tried)} نموذجًا: {last_error}")
     kind = plan.get("kind")
     if kind == "answer" and ("JSON" in str(plan.get("text", "")) or "وكيل" in str(plan.get("text", ""))) and any(word in text for word in ("أنشئ", "اعمل", "سوي", "اكتب", "برمج", "نفذ")):
-        plan = await ask_model("حوّل الطلب إلى خطة تنفيذ فعلية، ولا تشرح الصيغة: " + text, saved_context, provider=model.provider, model=model.model_id)
+        plan = await ask_model("حوّل الطلب إلى خطة تنفيذ فعلية، ولا تشرح الصيغة: " + text, saved_context, provider=active_model.provider, model=active_model.model_id)
         kind = plan.get("kind")
     if kind == "answer":
         answer = str(plan.get("text", "لم أفهم الطلب."))[:4000]
