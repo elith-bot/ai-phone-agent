@@ -40,6 +40,23 @@ chmod +x ~/.termux/boot/start-agent
 
 بعد ذلك سيبدأ الوكيل بعد إقلاع الهاتف. أرسل `/status` في Telegram للتحقق.
 
+## إعادة التشغيل من Telegram
+
+بعد تحديث الكود أو إعدادات `.env`، أرسل للبوت:
+
+```text
+/restart
+```
+
+سيستبدل الوكيل عمليته الحالية ويبدأ من جديد. لا حاجة لإرسال `Ctrl+C` أو تشغيل `python -m agent.bot` يدويًا.
+
+إذا لم يعد البوت بعد ثوانٍ، شغّله من Termux:
+
+```bash
+cd ~/ai_phone_agent
+./scripts/start_agent.sh
+```
+
 ## مهم في إعدادات Android
 
 - عطّل تحسين البطارية لتطبيق Termux وTermux:Boot.

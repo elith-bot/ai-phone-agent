@@ -3,6 +3,7 @@ import logging
 import os
 import secrets
 import shlex
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -34,7 +35,7 @@ async def deny(update: Update):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
-    await update.message.reply_text("أهلًا. أنفذ المهام العادية تلقائيًا، وأطلب موافقة بزر واحد قبل حذف الملفات. أرسل /status للمعلومات.")
+    await update.message.reply_text("أهلًا. أنفذ المهام العادية تلقائيًا، وأطلب موافقة بزر واحد قبل حذف الملفات. أرسل /status للمعلومات أو /restart لإعادة التشغيل.")
 
 
 async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,6 +89,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     removed = len(PENDING)
     PENDING.clear()
     await update.message.reply_text(f"تم إلغاء {removed} عملية حذف معلقة.")
+
+
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return await deny(update)
+    await update.message.reply_text("سأعيد تشغيل الوكيل الآن. انتظر ثوانٍ ثم أرسل /status.")
+    await asyncio.sleep(0.8)
+    os.execv(sys.executable, [sys.executable, "-m", "agent.bot"])
 
 
 async def execute_commands(update: Update, commands: list[str]):
@@ -291,6 +300,7 @@ async def async_main():
     app.add_handler(CommandHandler("web", web_message))
     app.add_handler(CommandHandler("remember", remember))
     app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CallbackQueryHandler(approve_delete, pattern=r"^(approve|reject):"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_message))
     app.add_handler(MessageHandler(filters.PHOTO, photo_message))
