@@ -3,6 +3,7 @@ import logging
 import os
 import secrets
 import shlex
+from pathlib import Path
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -11,6 +12,8 @@ from .tools import run_shell, validate_command, workspace, is_delete_command
 from .memory import add_memory, add_message, get_context, init_db, stats
 from .tool_registry import execute_tool
 from .model_router import ModelRouter
+from .media import download_telegram_file, extract_pdf, groq_transcribe, video_frames, vision_answer, web_search
+from .provider_status import all_provider_status
 
 ROUTER = ModelRouter()
 
@@ -62,6 +65,13 @@ async def models_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("كتالوج النماذج:\n" + "\n".join(lines))
 
 
+async def health_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return await deny(update)
+    rows = await all_provider_status()
+    await update.message.reply_text("حالة المزودات عبر API:\n" + "\n".join(str(row) for row in rows))
+
+
 async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
@@ -110,10 +120,9 @@ async def approve_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await execute_commands(update, commands)
 
 
-async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_text(update: Update, text: str):
     if not allowed(update):
         return await deny(update)
-    text = update.message.text.strip()
     add_message(update.effective_user.id, "user", text)
     if text.startswith(("تذكر أن", "احفظ أن", "لا تنس أن")):
         add_memory(update.effective_user.id, text.split(" ", 2)[-1])
@@ -184,6 +193,77 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"بدأت تنفيذ {len(commands)} خطوة تلقائيًا داخل {workspace()}. سأرسل النتيجة عند الانتهاء.")
 
 
+async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return await deny(update)
+    await process_text(update, update.message.text.strip())
+
+
+async def voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update): return await deny(update)
+    try:
+        path = await download_telegram_file(update.message, context, ".ogg")
+        text = await groq_transcribe(path)
+        await update.message.reply_text(f"النص المستخرج:\n{text}")
+        await process_text(update, text)
+    except Exception as exc:
+        await update.message.reply_text(f"تعذر معالجة الصوت: {exc}")
+
+
+async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update): return await deny(update)
+    try:
+        path = await download_telegram_file(update.message, context, ".jpg")
+        prompt = update.message.caption or "حلل الصورة واشرح ما فيها بالعربية."
+        model, _ = ROUTER.choose(prompt, media="image")
+        result = await vision_answer(path, prompt, model.provider, model.model_id)
+        await update.message.reply_text(result[:9000])
+    except Exception as exc:
+        await update.message.reply_text(f"تعذر تحليل الصورة: {exc}")
+
+
+async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update): return await deny(update)
+    name = (update.message.document.file_name or "file").lower()
+    try:
+        path = await download_telegram_file(update.message, context, Path(name).suffix or ".bin")
+        if name.endswith(".pdf"):
+            text = extract_pdf(path)
+            await process_text(update, f"حلل ملف PDF التالي وأجب عن طلب المستخدم السابق أو لخصه:\n{text}")
+        else:
+            await update.message.reply_text(f"تم تنزيل الملف محليًا: {path}. اطلب مني قراءته أو معالجته.")
+    except Exception as exc:
+        await update.message.reply_text(f"تعذر معالجة الملف: {exc}")
+
+
+async def video_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update): return await deny(update)
+    try:
+        path = await download_telegram_file(update.message, context, ".mp4")
+        frames = video_frames(path)
+        if frames:
+            prompt = update.message.caption or "حلل هذه اللقطة من الفيديو باختصار بالعربية."
+            model, _ = ROUTER.choose(prompt, media="image")
+            analyses = await asyncio.gather(*(vision_answer(frame, prompt, model.provider, model.model_id) for frame in frames[:3]), return_exceptions=True)
+            text = "\n\n".join(f"اللقطة {i + 1}: {value}" for i, value in enumerate(analyses) if isinstance(value, str))
+            await update.message.reply_text(f"استخرجت {len(frames)} لقطات من الفيديو:\n{text}"[:9000])
+        else:
+            await update.message.reply_text("استلمت الفيديو لكن لم أستطع استخراج لقطات. تأكد من تثبيت ffmpeg في Termux.")
+    except Exception as exc:
+        await update.message.reply_text(f"تعذر معالجة الفيديو: {exc}. تأكد من تثبيت ffmpeg في Termux.")
+
+
+async def web_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update): return await deny(update)
+    query = " ".join(context.args).strip()
+    if not query: return await update.message.reply_text("استخدم: /web ابحث عن أحدث أخبار Android")
+    try:
+        results = await web_search(query)
+        await process_text(update, f"لخص نتائج البحث التالية وأجب بالعربية مع ذكر الروابط:\n{results}")
+    except Exception as exc:
+        await update.message.reply_text(f"تعذر البحث: {exc}")
+
+
 async def async_main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -195,9 +275,15 @@ async def async_main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("memory", memory_status))
     app.add_handler(CommandHandler("models", models_status))
+    app.add_handler(CommandHandler("health", health_status))
+    app.add_handler(CommandHandler("web", web_message))
     app.add_handler(CommandHandler("remember", remember))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(approve_delete, pattern=r"^(approve|reject):"))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_message))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_message))
+    app.add_handler(MessageHandler(filters.Document.ALL, document_message))
+    app.add_handler(MessageHandler(filters.VIDEO, video_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     await app.initialize()
     await app.start()
