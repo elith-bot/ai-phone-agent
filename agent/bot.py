@@ -10,6 +10,9 @@ from .providers import ask_model
 from .tools import run_shell, validate_command, workspace, is_delete_command
 from .memory import add_memory, add_message, get_context, init_db, stats
 from .tool_registry import execute_tool
+from .model_router import ModelRouter
+
+ROUTER = ModelRouter()
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -47,6 +50,16 @@ async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await deny(update)
     messages, memories = stats(update.effective_user.id)
     await update.message.reply_text(f"الذاكرة محفوظة محليًا في SQLite.\nالرسائل: {messages}\nالذكريات: {memories}\nالسياق الحديث يُعاد تلقائيًا مع كل طلب.")
+
+
+async def models_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return await deny(update)
+    lines = []
+    for row in ROUTER.status():
+        limits = f"{row['used_today']}/{row['daily_limit'] or 'غير محدد'} يوميًا"
+        lines.append(f"{row['key']} | {row['provider']} | {'متاح' if row['healthy'] else 'غير متاح'} | {limits}")
+    await update.message.reply_text("كتالوج النماذج:\n" + "\n".join(lines))
 
 
 async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,13 +119,21 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_memory(update.effective_user.id, text.split(" ", 2)[-1])
     saved_context = get_context(update.effective_user.id)
     try:
-        plan = await ask_model(text, saved_context)
+        model, request_info = ROUTER.choose(text)
+        ROUTER.mark_started(model)
+        plan = await ask_model(text, saved_context, provider=model.provider, model=model.model_id)
     except Exception as exc:
         logging.exception("model failure")
-        return await update.message.reply_text(f"تعذر الاتصال بالنموذج: {exc}")
+        try:
+            fallback, _ = ROUTER.choose(text, exclude={model.key} if 'model' in locals() else set())
+            ROUTER.mark_started(fallback)
+            plan = await ask_model(text, saved_context, provider=fallback.provider, model=fallback.model_id)
+            await update.message.reply_text(f"استخدمت النموذج الاحتياطي: {fallback.key}")
+        except Exception:
+            return await update.message.reply_text(f"تعذر الاتصال بالنماذج حاليًا: {exc}")
     kind = plan.get("kind")
     if kind == "answer" and ("JSON" in str(plan.get("text", "")) or "وكيل" in str(plan.get("text", ""))) and any(word in text for word in ("أنشئ", "اعمل", "سوي", "اكتب", "برمج", "نفذ")):
-        plan = await ask_model("حوّل الطلب إلى خطة تنفيذ فعلية، ولا تشرح الصيغة: " + text, saved_context)
+        plan = await ask_model("حوّل الطلب إلى خطة تنفيذ فعلية، ولا تشرح الصيغة: " + text, saved_context, provider=model.provider, model=model.model_id)
         kind = plan.get("kind")
     if kind == "answer":
         answer = str(plan.get("text", "لم أفهم الطلب."))[:4000]
@@ -173,6 +194,7 @@ async def async_main():
     app.add_handler(CommandHandler("id", user_id))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("memory", memory_status))
+    app.add_handler(CommandHandler("models", models_status))
     app.add_handler(CommandHandler("remember", remember))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(approve_delete, pattern=r"^(approve|reject):"))

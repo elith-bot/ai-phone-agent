@@ -46,8 +46,8 @@ def _json_from_text(text: str) -> dict[str, Any]:
         return {"kind": "answer", "text": text}
 
 
-async def _gemini(user_text: str, context: str = "") -> dict[str, Any]:
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+async def _gemini(user_text: str, context: str = "", model: str | None = None) -> dict[str, Any]:
+    model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     key = os.environ["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {
@@ -71,25 +71,36 @@ async def _gemini(user_text: str, context: str = "") -> dict[str, Any]:
     return _json_from_text(text)
 
 
-async def ask_model(user_text: str, context: str = "") -> dict[str, Any]:
-    provider = os.getenv("AI_PROVIDER", "gemini").lower()
+async def ask_model(user_text: str, context: str = "", provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+    provider = (provider or os.getenv("AI_PROVIDER", "gemini")).lower()
     if provider == "gemini":
-        return await _gemini(user_text, context)
+        return await _gemini(user_text, context, model)
     if provider in {"openai", "local"}:
-        from openai import AsyncOpenAI
         if provider == "local":
             base_url = os.getenv("LOCAL_BASE_URL", "http://127.0.0.1:11434/v1")
             api_key = os.getenv("LOCAL_API_KEY", "local")
-            model = os.getenv("LOCAL_MODEL", "llama3.2")
+            model = model or os.getenv("LOCAL_MODEL", "llama3.2")
         else:
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
             api_key = os.environ["OPENAI_API_KEY"]
-            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_text}],
-            response_format={"type": "json_object"},
-        )
-        return _json_from_text(response.choices[0].message.content or "{}")
+            model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        return await _compatible_chat(base_url, api_key, model, user_text, context)
+    if provider in {"groq", "openrouter"}:
+        if provider == "groq":
+            base_url = "https://api.groq.com/openai/v1"
+            api_key = os.environ["GROQ_API_KEY"]
+            model = model or os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+        else:
+            base_url = "https://openrouter.ai/api/v1"
+            api_key = os.environ["OPENROUTER_API_KEY"]
+            model = model or os.getenv("OPENROUTER_MODEL", "openrouter/free")
+        return await _compatible_chat(base_url, api_key, model, user_text, context)
     raise ValueError(f"مزود غير معروف: {provider}")
+
+
+async def _compatible_chat(base_url: str, api_key: str, model: str, user_text: str, context: str) -> dict[str, Any]:
+    body = {"model": model, "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": f"السياق المحفوظ:\n{context}\n\nالطلب الحالي:\n{user_text}"}], "response_format": {"type": "json_object"}}
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {api_key}"}, json=body)
+        response.raise_for_status()
+    return _json_from_text(response.json()["choices"][0]["message"]["content"] or "{}")
