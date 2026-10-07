@@ -31,7 +31,43 @@ def _text(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def _ensure_path_config() -> str:
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    values = {
+        "WORKSPACE_DIR": "/data/data/com.termux/files/home/agent-workspace",
+        "PHONE_WORKSPACE_DIR": "/data/data/com.termux/files/home/storage/shared/AI_Workspace",
+        "PHONE_STORAGE_ROOT": "/data/data/com.termux/files/home/storage/shared",
+        "AGENT_MODE": "safe",
+        "MAX_COMMAND_SECONDS": "20",
+    }
+    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    lines = existing.splitlines()
+    seen = set()
+    output = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if line and not line.lstrip().startswith("#") and "=" in line else ""
+        if key in values:
+            output.append(f"{key}={values[key]}")
+            seen.add(key)
+        else:
+            output.append(line)
+    if output and output[-1] != "":
+        output.append("")
+    for key, value in values.items():
+        if key not in seen:
+            output.append(f"{key}={value}")
+    env_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+    try:
+        env_path.chmod(0o600)
+    except OSError:
+        pass
+    phone_workspace().mkdir(parents=True, exist_ok=True)
+    return f"تم تحديث إعدادات المسارات في {env_path} وإنشاء مجلد ملفات المستخدم: {phone_workspace()} دون تغيير مفاتيح API."
+
+
 async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+    if name == "config.ensure_paths":
+        return _ensure_path_config()
     if name == "adb.devices":
         return await adb_devices()
     if name == "adb.ui_dump":
