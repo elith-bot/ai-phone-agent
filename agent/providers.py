@@ -13,6 +13,7 @@ SYSTEM_PROMPT = '''أنت وكيل محلي على هاتف Android داخل Ter
 {"kind":"batch","commands":["الأمر الأول","الأمر الثاني"],"reason":"..."}
 لعمليات الملفات المنظمة، فضّل أداة واحدة بهذا الشكل:
 {"kind":"tool","tool":"filesystem.create|filesystem.read|filesystem.update|filesystem.search|filesystem.delete|terminal.run|config.ensure_paths|adb.devices|adb.ui_dump|adb.ui_find|adb.tap","arguments":{},"reason":"..."}
+أداة terminal.run تنفذ أوامر Termux المثبتة فعليًا مثل python وpip وffmpeg وinstaloader وgit وcurl. إذا كان الطلب يتطلب تنزيلًا أو تثبيتًا أو تشغيل برنامج، استخدم terminal.run أو batch ولا تقل إن الأدوات غير موجودة قبل اختبارها. لا تستخدم أوامر timeout داخلية قصيرة إلا إذا طلب المستخدم ذلك.
 لا تضع Markdown خارج JSON. لا تنفذ الأدوات بنفسك.
 لِلمهام البرمجية استخدم مسارات واضحة. لا تضع الأسرار في الأوامر أو المخرجات.
 مهم: يجب أن يكون ردك كائن JSON صالحًا، وأن تكون kind إحدى: answer أو shell أو batch أو tool.

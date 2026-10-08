@@ -39,9 +39,11 @@ def _ensure_path_config() -> str:
         "PHONE_WORKSPACE_DIR": "/data/data/com.termux/files/home/storage/shared/AI_Workspace",
         "PHONE_STORAGE_ROOT": "/data/data/com.termux/files/home/storage/shared",
         "AGENT_MODE": "safe",
-        "MAX_COMMAND_SECONDS": "300",
+        "MAX_COMMAND_SECONDS": "0",
         "AI_REQUEST_TIMEOUT": "120",
         "TASK_HEARTBEAT_SECONDS": "20",
+        "MESSAGE_DEBOUNCE_SECONDS": "2",
+        "STEP_RETRIES": "1",
     }
     existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     lines = existing.splitlines()

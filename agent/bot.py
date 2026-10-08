@@ -22,6 +22,9 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 PENDING: dict[str, tuple[int, list[str]]] = {}
 ACTIVE_TASKS: dict[str, dict[str, object]] = {}
+TASK_HANDLES: dict[str, asyncio.Task] = {}
+MESSAGE_BUFFER: dict[int, list[str]] = {}
+MESSAGE_DEBOUNCE: dict[int, asyncio.Task] = {}
 
 
 def allowed(update: Update) -> bool:
@@ -102,6 +105,21 @@ async def tasks_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("المهام الخلفية النشطة:\n" + "\n".join(lines))
 
 
+async def cancel_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not allowed(update):
+        await query.answer("غير مصرح", show_alert=True)
+        return
+    task_id = query.data.split(":", 1)[1]
+    task = TASK_HANDLES.get(task_id)
+    if not task:
+        await query.answer("المهمة انتهت أو غير موجودة", show_alert=True)
+        return
+    task.cancel()
+    await query.answer("تم إرسال طلب الإلغاء")
+    await query.edit_message_text(f"تم إلغاء المهمة {task_id}.")
+
+
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
@@ -118,15 +136,21 @@ async def _task_heartbeat(update: Update, task_id: str):
             await update.effective_message.reply_text(f"ما زلت أعمل: {item['label']} — الخطوة {item['step']}/{item['total']} قيد التنفيذ.")
 
 
-async def execute_commands(update: Update, commands: list[str]):
-    task_id = secrets.token_urlsafe(4)
+async def execute_commands(update: Update, commands: list[str], task_id: str | None = None):
+    task_id = task_id or secrets.token_urlsafe(4)
     ACTIVE_TASKS[task_id] = {"label": "مهمة أوامر", "step": 0, "total": len(commands)}
     heartbeat = asyncio.create_task(_task_heartbeat(update, task_id))
     results = []
     try:
         for index, command in enumerate(commands, 1):
             ACTIVE_TASKS[task_id]["step"] = index
-            code, output = await run_shell(command)
+            code, output = 1, ""
+            attempts = max(0, int(os.getenv("STEP_RETRIES", "1"))) + 1
+            for attempt in range(1, attempts + 1):
+                code, output = await run_shell(command)
+                if code == 0 or attempt == attempts:
+                    break
+                await update.effective_message.reply_text(f"الخطوة {index} فشلت؛ أعيد المحاولة {attempt + 1}/{attempts}.")
             results.append(f"الخطوة {index} ({code})\n$ {command}\n{output or 'تم التنفيذ بلا مخرجات'}")
             if code != 0:
                 results.append("فشلت هذه الخطوة، لكن سأتابع بقية خطوات المهمة.")
@@ -136,6 +160,7 @@ async def execute_commands(update: Update, commands: list[str]):
     finally:
         heartbeat.cancel()
         ACTIVE_TASKS.pop(task_id, None)
+        TASK_HANDLES.pop(task_id, None)
 
 
 async def approve_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -151,8 +176,11 @@ async def approve_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, commands = pending
     if action == "reject":
         return await query.edit_message_text("تم رفض العملية.")
-    await query.edit_message_text("تمت الموافقة. بدأ تنفيذ المهمة...")
-    await execute_commands(update, commands)
+    task_id = secrets.token_urlsafe(4)
+    task = asyncio.create_task(execute_commands(update, commands, task_id))
+    TASK_HANDLES[task_id] = task
+    keyboard = [[InlineKeyboardButton("إلغاء المهمة", callback_data=f"cancel_task:{task_id}")]]
+    await query.edit_message_text("تمت الموافقة. بدأت المهمة في الخلفية...", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def process_text(update: Update, text: str):
@@ -243,14 +271,39 @@ async def process_text(update: Update, text: str):
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
     # المهام العادية تبدأ فورًا؛ يمكن استقبال مهام أخرى بالتوازي.
-    asyncio.create_task(execute_commands(update, commands))
-    await update.message.reply_text(f"بدأت تنفيذ {len(commands)} خطوة تلقائيًا داخل {workspace()}. سأرسل النتيجة عند الانتهاء.")
+    task_id = secrets.token_urlsafe(4)
+    task = asyncio.create_task(execute_commands(update, commands, task_id))
+    TASK_HANDLES[task_id] = task
+    keyboard = [[InlineKeyboardButton("إلغاء المهمة", callback_data=f"cancel_task:{task_id}")]]
+    await update.message.reply_text(
+        f"بدأت تنفيذ {len(commands)} خطوة تلقائيًا داخل {workspace()}. سأرسل تحديثًا دوريًا والنتيجة عند الانتهاء.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def _flush_message_buffer(update: Update, user_id: int):
+    try:
+        await asyncio.sleep(float(os.getenv("MESSAGE_DEBOUNCE_SECONDS", "2")))
+        parts = MESSAGE_BUFFER.pop(user_id, [])
+        if not parts:
+            return
+        combined = parts[0] if len(parts) == 1 else "\n\n".join(f"الرسالة {i}: {part}" for i, part in enumerate(parts, 1))
+        await process_text(update, combined)
+    except asyncio.CancelledError:
+        return
+    finally:
+        MESSAGE_DEBOUNCE.pop(user_id, None)
 
 
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
-    await process_text(update, update.message.text.strip())
+    user_id = update.effective_user.id
+    MESSAGE_BUFFER.setdefault(user_id, []).append(update.message.text.strip())
+    previous = MESSAGE_DEBOUNCE.get(user_id)
+    if previous:
+        previous.cancel()
+    MESSAGE_DEBOUNCE[user_id] = asyncio.create_task(_flush_message_buffer(update, user_id))
 
 
 async def voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -336,6 +389,7 @@ async def async_main():
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CallbackQueryHandler(approve_delete, pattern=r"^(approve|reject):"))
+    app.add_handler(CallbackQueryHandler(cancel_task, pattern=r"^cancel_task:"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_message))
     app.add_handler(MessageHandler(filters.PHOTO, photo_message))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
