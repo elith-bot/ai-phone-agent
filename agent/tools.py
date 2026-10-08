@@ -46,7 +46,7 @@ async def run_shell(command: str) -> tuple[int, str]:
         env=os.environ.copy(),
     )
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=int(os.getenv("MAX_COMMAND_SECONDS", "20")))
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=int(os.getenv("MAX_COMMAND_SECONDS", "300")))
     except asyncio.TimeoutError:
         proc.kill()
         return 124, "انتهت مهلة الأمر."

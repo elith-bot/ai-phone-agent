@@ -23,6 +23,9 @@ SYSTEM_PROMPT = '''أنت وكيل محلي على هاتف Android داخل Ter
 
 RESPONSE_SCHEMA = {"type": "OBJECT", "properties": {"kind": {"type": "STRING", "enum": ["answer", "shell", "batch", "tool"]}, "text": {"type": "STRING"}, "command": {"type": "STRING"}, "commands": {"type": "ARRAY", "items": {"type": "STRING"}}, "reason": {"type": "STRING"}, "tool": {"type": "STRING"}, "arguments": {"type": "OBJECT"}}, "required": ["kind"]}
 
+def _request_timeout() -> float:
+    return float(os.getenv("AI_REQUEST_TIMEOUT", "120"))
+
 def _json_from_text(text: str) -> dict[str, Any]:
     text = text.strip()
     if text.startswith("```"):
@@ -38,7 +41,7 @@ async def _gemini(user_text: str, context: str = "", model: str | None = None) -
     key = os.environ["GEMINI_API_KEY"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {"system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]}, "contents": [{"role": "user", "parts": [{"text": f"السياق المحفوظ:\n{context}\n\nالطلب الحالي:\n{user_text}"}]}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": RESPONSE_SCHEMA}}
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=_request_timeout()) as client:
         response = None
         for attempt in range(3):
             response = await client.post(url, params={"key": key}, json=body)
@@ -51,7 +54,7 @@ async def _gemini(user_text: str, context: str = "", model: str | None = None) -
 
 async def _compatible_chat(base_url: str, api_key: str, model: str, user_text: str, context: str) -> dict[str, Any]:
     body = {"model": model, "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": f"السياق المحفوظ:\n{context}\n\nالطلب الحالي:\n{user_text}"}], "response_format": {"type": "json_object"}}
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=_request_timeout()) as client:
         response = await client.post(f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {api_key}"}, json=body)
         response.raise_for_status()
     return _json_from_text(response.json()["choices"][0]["message"]["content"] or "{}")

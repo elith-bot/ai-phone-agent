@@ -21,6 +21,7 @@ ROUTER = ModelRouter()
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 PENDING: dict[str, tuple[int, list[str]]] = {}
+ACTIVE_TASKS: dict[str, dict[str, object]] = {}
 
 
 def allowed(update: Update) -> bool:
@@ -35,7 +36,7 @@ async def deny(update: Update):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
-    await update.message.reply_text("أهلًا. أنفذ المهام العادية تلقائيًا، وأطلب موافقة بزر واحد قبل حذف الملفات. أرسل /status للمعلومات أو /restart لإعادة التشغيل.")
+    await update.message.reply_text("أهلًا. أنفذ المهام العادية تلقائيًا، وأطلب موافقة بزر واحد قبل حذف الملفات. أرسل /status للمعلومات، /tasks للمهام الجارية، أو /restart لإعادة التشغيل.")
 
 
 async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -46,7 +47,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
     messages, memories = stats(update.effective_user.id)
-    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: full-with-delete-approval\nمساحة التنفيذ: {workspace()}\nملفات المستخدم: {phone_workspace()}\nالذاكرة: {messages} رسالة، {memories} ذاكرة")
+    active = "لا توجد" if not ACTIVE_TASKS else "، ".join(str(item["label"]) for item in ACTIVE_TASKS.values())
+    await update.message.reply_text(f"المزود: {os.getenv('AI_PROVIDER','gemini')}\nالوضع: full-with-delete-approval\nمساحة التنفيذ: {workspace()}\nملفات المستخدم: {phone_workspace()}\nالمهام النشطة: {active}\nالذاكرة: {messages} رسالة، {memories} ذاكرة")
 
 
 async def memory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -91,6 +93,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"تم إلغاء {removed} عملية حذف معلقة.")
 
 
+async def tasks_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return await deny(update)
+    if not ACTIVE_TASKS:
+        return await update.message.reply_text("لا توجد مهام خلفية تعمل حاليًا.")
+    lines = [f"{task_id}: {item['label']} — الخطوة {item['step']}/{item['total']}" for task_id, item in ACTIVE_TASKS.items()]
+    await update.message.reply_text("المهام الخلفية النشطة:\n" + "\n".join(lines))
+
+
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return await deny(update)
@@ -99,16 +110,32 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.execv(sys.executable, [sys.executable, "-m", "agent.bot"])
 
 
+async def _task_heartbeat(update: Update, task_id: str):
+    while True:
+        await asyncio.sleep(int(os.getenv("TASK_HEARTBEAT_SECONDS", "20")))
+        item = ACTIVE_TASKS.get(task_id)
+        if item:
+            await update.effective_message.reply_text(f"ما زلت أعمل: {item['label']} — الخطوة {item['step']}/{item['total']} قيد التنفيذ.")
+
+
 async def execute_commands(update: Update, commands: list[str]):
+    task_id = secrets.token_urlsafe(4)
+    ACTIVE_TASKS[task_id] = {"label": "مهمة أوامر", "step": 0, "total": len(commands)}
+    heartbeat = asyncio.create_task(_task_heartbeat(update, task_id))
     results = []
-    for index, command in enumerate(commands, 1):
-        code, output = await run_shell(command)
-        results.append(f"الخطوة {index} ({code})\n$ {command}\n{output or 'تم التنفيذ بلا مخرجات'}")
-        if code != 0:
-            results.append("فشلت هذه الخطوة، لكن سأتابع بقية خطوات المهمة.")
-    text = "\n\n".join(results)
-    add_message(update.effective_user.id, "tool", text)
-    await update.effective_message.reply_text(f"اكتملت المهمة:\n\n{text}"[-9000:])
+    try:
+        for index, command in enumerate(commands, 1):
+            ACTIVE_TASKS[task_id]["step"] = index
+            code, output = await run_shell(command)
+            results.append(f"الخطوة {index} ({code})\n$ {command}\n{output or 'تم التنفيذ بلا مخرجات'}")
+            if code != 0:
+                results.append("فشلت هذه الخطوة، لكن سأتابع بقية خطوات المهمة.")
+        text = "\n\n".join(results)
+        add_message(update.effective_user.id, "tool", text)
+        await update.effective_message.reply_text(f"اكتملت المهمة:\n\n{text}"[-9000:])
+    finally:
+        heartbeat.cancel()
+        ACTIVE_TASKS.pop(task_id, None)
 
 
 async def approve_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -178,12 +205,18 @@ async def process_text(update: Update, text: str):
             commands = [str(arguments.get("command", "")).strip()]
         else:
             async def run_registered_tool():
+                task_id = secrets.token_urlsafe(4)
+                ACTIVE_TASKS[task_id] = {"label": f"الأداة {tool_name}", "step": 1, "total": 1}
+                heartbeat = asyncio.create_task(_task_heartbeat(update, task_id))
                 try:
                     result = await execute_tool(tool_name, arguments)
                     add_message(update.effective_user.id, "tool", result)
                     await update.effective_message.reply_text(result[-9000:])
                 except Exception as exc:
                     await update.effective_message.reply_text(f"فشل تنفيذ الأداة: {exc}")
+                finally:
+                    heartbeat.cancel()
+                    ACTIVE_TASKS.pop(task_id, None)
             asyncio.create_task(run_registered_tool())
             return await update.message.reply_text(f"بدأت أداة {tool_name} تلقائيًا.")
     elif kind == "shell":
@@ -294,6 +327,7 @@ async def async_main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", user_id))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("tasks", tasks_status))
     app.add_handler(CommandHandler("memory", memory_status))
     app.add_handler(CommandHandler("models", models_status))
     app.add_handler(CommandHandler("health", health_status))

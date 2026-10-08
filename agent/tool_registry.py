@@ -16,6 +16,7 @@ def resolve_path(raw: str) -> Path:
     storage_root = str(shared_root())
     value = value.replace("/storage/emulated/0", storage_root, 1)
     value = value.replace("/sdcard", storage_root, 1)
+    value = value.replace("~/AI_Workspace", str(phone_workspace()), 1)
     if value.startswith("~/storage/shared/shared"):
         value = value.replace("~/storage/shared/shared", "~/storage/shared", 1)
     elif value.startswith("~/storage/") and not value.startswith("~/storage/shared"):
@@ -38,7 +39,7 @@ def _ensure_path_config() -> str:
         "PHONE_WORKSPACE_DIR": "/data/data/com.termux/files/home/storage/shared/AI_Workspace",
         "PHONE_STORAGE_ROOT": "/data/data/com.termux/files/home/storage/shared",
         "AGENT_MODE": "safe",
-        "MAX_COMMAND_SECONDS": "20",
+        "MAX_COMMAND_SECONDS": "300",
     }
     existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     lines = existing.splitlines()
