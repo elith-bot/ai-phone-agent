@@ -40,6 +40,8 @@ def _ensure_path_config() -> str:
         "PHONE_STORAGE_ROOT": "/data/data/com.termux/files/home/storage/shared",
         "AGENT_MODE": "safe",
         "MAX_COMMAND_SECONDS": "300",
+        "AI_REQUEST_TIMEOUT": "120",
+        "TASK_HEARTBEAT_SECONDS": "20",
     }
     existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     lines = existing.splitlines()
