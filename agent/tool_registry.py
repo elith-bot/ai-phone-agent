@@ -24,6 +24,8 @@ def shared_root() -> Path:
 
 def resolve_path(raw: str) -> Path:
     value = str(raw).strip()
+    if value and not value.startswith(("/", "~")):
+        value = str(phone_workspace() / value)
     storage_root = str(shared_root())
     value = value.replace("/storage/emulated/0", storage_root, 1)
     value = value.replace("/sdcard", storage_root, 1)

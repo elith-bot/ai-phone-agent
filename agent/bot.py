@@ -15,6 +15,7 @@ from .tool_registry import execute_tool
 from .model_router import ModelRouter
 from .media import download_telegram_file, extract_pdf, groq_transcribe, video_frames, vision_answer, web_search
 from .provider_status import all_provider_status
+from .orchestrator import execute_plan
 
 ROUTER = ModelRouter()
 
@@ -163,6 +164,36 @@ async def execute_commands(update: Update, commands: list[str], task_id: str | N
         TASK_HANDLES.pop(task_id, None)
 
 
+async def execute_model_plan(update: Update, steps: list[dict[str, object]], task_id: str):
+    ACTIVE_TASKS[task_id] = {"label": "خطة أدوات", "step": 0, "total": len(steps)}
+    heartbeat = asyncio.create_task(_task_heartbeat(update, task_id))
+
+    async def progress(index: int, total: int, title: str, state: str):
+        item = ACTIVE_TASKS.get(task_id)
+        if item:
+            item["step"] = index
+            item["total"] = total
+            item["label"] = f"خطة أدوات: {title}"
+
+    try:
+        results = await execute_plan(steps, task_id, progress)
+        lines = []
+        for item in results:
+            marker = "نجحت" if item["success"] else f"فشلت ({item['failure']})"
+            lines.append(f"الخطوة {item['index']} — {item['title']}: {marker}\n{item['result']}")
+        summary = "اكتملت الخطة:\n\n" + "\n\n".join(lines)
+        add_message(update.effective_user.id, "tool", summary)
+        await update.effective_message.reply_text(summary[-9000:])
+    except asyncio.CancelledError:
+        await update.effective_message.reply_text("تم إلغاء الخطة بأمان.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"تعذر تشغيل الخطة: {exc}")
+    finally:
+        heartbeat.cancel()
+        ACTIVE_TASKS.pop(task_id, None)
+        TASK_HANDLES.pop(task_id, None)
+
+
 async def approve_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not allowed(update):
@@ -224,6 +255,18 @@ async def process_text(update: Update, text: str):
         answer = str(plan.get("text", "لم أفهم الطلب."))[:4000]
         add_message(update.effective_user.id, "assistant", answer)
         return await update.message.reply_text(answer)
+    if kind == "plan":
+        steps = plan.get("steps")
+        if not isinstance(steps, list) or not steps or len(steps) > int(os.getenv("MAX_PLAN_STEPS", "30")):
+            return await update.message.reply_text("رفضت الخطة: عدد الخطوات غير صالح أو يتجاوز الحد المسموح.")
+        valid_steps = [step for step in steps if isinstance(step, dict) and str(step.get("tool", "")).strip()]
+        if len(valid_steps) != len(steps):
+            return await update.message.reply_text("رفضت الخطة: توجد خطوة بلا أداة واضحة.")
+        task_id = secrets.token_urlsafe(4)
+        task = asyncio.create_task(execute_model_plan(update, valid_steps, task_id))
+        TASK_HANDLES[task_id] = task
+        keyboard = [[InlineKeyboardButton("إلغاء الخطة", callback_data=f"cancel_task:{task_id}")]]
+        return await update.message.reply_text(f"بدأت خطة من {len(valid_steps)} خطوات. سأتحقق من كل خطوة وأبلغك بالنتيجة.", reply_markup=InlineKeyboardMarkup(keyboard))
     if kind == "tool":
         tool_name = str(plan.get("tool", ""))
         arguments = plan.get("arguments") or {}

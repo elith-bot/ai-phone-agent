@@ -16,14 +16,17 @@ SYSTEM_PROMPT = '''أنت وكيل محلي على هاتف Android داخل Ter
 أداة terminal.run تنفذ أوامر Termux المثبتة فعليًا مثل python وpip وffmpeg وinstaloader وgit وcurl. إذا كان الطلب يتطلب تنزيلًا أو تثبيتًا أو تشغيل برنامج، استخدم terminal.run أو batch ولا تقل إن الأدوات غير موجودة قبل اختبارها. لا تستخدم أوامر timeout داخلية قصيرة إلا إذا طلب المستخدم ذلك.
 لا تضع Markdown خارج JSON. لا تنفذ الأدوات بنفسك.
 لِلمهام البرمجية استخدم مسارات واضحة. لا تضع الأسرار في الأوامر أو المخرجات.
+للمهمة التي تحتاج أكثر من أداة، أعد خطة منظمة بدل تنفيذ خطوة واحدة فقط:
+{"kind":"plan","steps":[{"title":"وصف الخطوة","tool":"اسم الأداة","arguments":{},"on_failure":"stop|continue"}],"reason":"..."}
+نفّذ خطوة واحدة في كل مرة، ولا تفترض نجاح الخطوة إلا بعد قراءة نتيجتها. إذا فشلت خطوة، اختر stop عندما تؤثر على الخطوات التالية، أو continue فقط إذا كانت مستقلة.
 أدوات adb تعمل فقط إذا كان adb مثبتًا وجهاز مصرحًا به. ابدأ بـ adb.devices ثم adb.capabilities. استخدم adb.ui_find ثم adb.tap بالاستعلام أو الإحداثيات. استخدم adb.screenshot داخل PHONE_WORKSPACE_DIR. لا تستخدم shell خامًا للتحكم بالهاتف، ولا تنفذ install أو uninstall أو clear-data أو تغيير إعدادات في هذه المرحلة.
-مهم: يجب أن يكون ردك كائن JSON صالحًا، وأن تكون kind إحدى: answer أو shell أو batch أو tool.
+مهم: يجب أن يكون ردك كائن JSON صالحًا، وأن تكون kind إحدى: answer أو shell أو batch أو tool أو plan.
 مجلد ملفات المستخدم الافتراضي هو PHONE_WORKSPACE_DIR، ويظهر في الهاتف باسم AI_Workspace. عند إنشاء HTML أو ملفات أو مجلدات للمستخدم استخدم هذا المجلد إذا لم يحدد مسارًا آخر.
 جذر ذاكرة الهاتف هو PHONE_STORAGE_ROOT، ومجلد التنزيلات تحته باسم Download، ومجلد الصور باسم Pictures.
 إذا طلب المستخدم مجلدًا بجانب Download فاستخدم PHONE_STORAGE_ROOT/اسم_المجلد. لا تستخدم مجلد Termux الداخلي لملفات المستخدم إلا إذا طلب ذلك صراحة.
 '''
 
-RESPONSE_SCHEMA = {"type": "OBJECT", "properties": {"kind": {"type": "STRING", "enum": ["answer", "shell", "batch", "tool"]}, "text": {"type": "STRING"}, "command": {"type": "STRING"}, "commands": {"type": "ARRAY", "items": {"type": "STRING"}}, "reason": {"type": "STRING"}, "tool": {"type": "STRING"}, "arguments": {"type": "OBJECT"}}, "required": ["kind"]}
+RESPONSE_SCHEMA = {"type": "OBJECT", "properties": {"kind": {"type": "STRING", "enum": ["answer", "shell", "batch", "tool", "plan"]}, "text": {"type": "STRING"}, "command": {"type": "STRING"}, "commands": {"type": "ARRAY", "items": {"type": "STRING"}}, "reason": {"type": "STRING"}, "tool": {"type": "STRING"}, "arguments": {"type": "OBJECT"}, "steps": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"title": {"type": "STRING"}, "tool": {"type": "STRING"}, "arguments": {"type": "OBJECT"}, "on_failure": {"type": "STRING"}}}}}, "required": ["kind"]}
 
 def _request_timeout() -> float:
     return float(os.getenv("AI_REQUEST_TIMEOUT", "120"))
