@@ -4,7 +4,18 @@ import os
 from pathlib import Path
 from typing import Any
 from .tools import phone_workspace, run_shell
-from .adb_tools import adb_devices, ui_dump, ui_find, adb_tap
+from .adb_tools import (
+    adb_capabilities,
+    adb_devices,
+    adb_key,
+    adb_open_app,
+    adb_screenshot,
+    adb_swipe,
+    adb_tap,
+    adb_type,
+    ui_dump,
+    ui_find,
+)
 
 
 def shared_root() -> Path:
@@ -44,6 +55,8 @@ def _ensure_path_config() -> str:
         "TASK_HEARTBEAT_SECONDS": "20",
         "MESSAGE_DEBOUNCE_SECONDS": "2",
         "STEP_RETRIES": "1",
+        "ADB_SERIAL": "",
+        "ADB_COMMAND_TIMEOUT": "30",
     }
     existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     lines = existing.splitlines()
@@ -75,12 +88,24 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return _ensure_path_config()
     if name == "adb.devices":
         return await adb_devices()
+    if name == "adb.capabilities":
+        return await adb_capabilities()
     if name == "adb.ui_dump":
         return await ui_dump()
     if name == "adb.ui_find":
         return await ui_find(_text(arguments.get("query")))
     if name == "adb.tap":
         return await adb_tap(_text(arguments.get("query")), _text(arguments.get("y")) or None)
+    if name == "adb.screenshot":
+        return await adb_screenshot(_text(arguments.get("path")))
+    if name == "adb.open_app":
+        return await adb_open_app(_text(arguments.get("package")))
+    if name == "adb.swipe":
+        return await adb_swipe(arguments.get("x1"), arguments.get("y1"), arguments.get("x2"), arguments.get("y2"), arguments.get("duration_ms", 400))
+    if name == "adb.type":
+        return await adb_type(_text(arguments.get("text")))
+    if name == "adb.key":
+        return await adb_key(arguments.get("keycode"))
     if name == "terminal.run":
         code, output = await run_shell(_text(arguments.get("command")))
         return f"النتيجة ({code}):\n{output or 'تم التنفيذ بلا مخرجات'}"
