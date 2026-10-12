@@ -1,6 +1,8 @@
 import asyncio
+import difflib
 import fnmatch
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 from .tools import phone_workspace, run_shell
@@ -44,6 +46,31 @@ def resolve_path(raw: str) -> Path:
 
 def _text(value: Any) -> str:
     return str(value) if value is not None else ""
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        handle.write(content)
+        temporary = Path(handle.name)
+    temporary.replace(path)
+
+
+def _patch_file(arguments: dict[str, Any]) -> str:
+    path = resolve_path(_text(arguments.get("path")))
+    old_text = _text(arguments.get("old_text"))
+    new_text = _text(arguments.get("new_text"))
+    if not old_text:
+        raise ValueError("old_text لا يمكن أن يكون فارغًا.")
+    if not path.exists():
+        raise FileNotFoundError(f"الملف غير موجود: {path}")
+    current = path.read_text(encoding="utf-8", errors="replace")
+    occurrences = current.count(old_text)
+    if occurrences != 1:
+        raise ValueError(f"لم يتم التعديل: المقطع ظهر {occurrences} مرة؛ يجب أن يظهر مرة واحدة فقط.")
+    updated = current.replace(old_text, new_text, 1)
+    _atomic_write(path, updated)
+    diff = "".join(difflib.unified_diff(current.splitlines(True), updated.splitlines(True), fromfile=str(path), tofile=str(path)))
+    return f"تم تعديل الملف مباشرة دون إعادة كتابته كاملًا: {path}\nDiff:\n{diff[-6000:]}"
 
 
 def _ensure_path_config() -> str:
@@ -127,6 +154,8 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_text(arguments.get("content")), encoding="utf-8")
         return f"تم {'إنشاء' if name.endswith('create') else 'تحديث'} الملف: {path}"
+    if name == "filesystem.patch":
+        return _patch_file(arguments)
     if name == "filesystem.read":
         path = resolve_path(_text(arguments.get("path")))
         return path.read_text(encoding="utf-8", errors="replace")[-12000:]
