@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Any
 from .tools import phone_workspace, run_shell
 from .termux_tools import battery_status, notification, open_url, toast, vibrate
+from .accessibility_tools import (
+    accessibility_back,
+    accessibility_click,
+    accessibility_health,
+    accessibility_home,
+    accessibility_snapshot,
+    accessibility_type,
+)
 from .adb_tools import (
     adb_capabilities,
     adb_devices,
@@ -87,6 +95,8 @@ def _ensure_path_config() -> str:
         "STEP_RETRIES": "1",
         "ADB_SERIAL": "",
         "ADB_COMMAND_TIMEOUT": "30",
+        "ANDROID_ACCESS_URL": "http://127.0.0.1:8765",
+        "ANDROID_ACCESS_TIMEOUT": "15",
     }
     existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     lines = existing.splitlines()
@@ -146,6 +156,18 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return await vibrate(arguments.get("duration_ms", 300))
     if name == "termux.open_url":
         return await open_url(_text(arguments.get("url")))
+    if name == "android.accessibility_health":
+        return await accessibility_health()
+    if name == "android.accessibility_snapshot":
+        return await accessibility_snapshot()
+    if name == "android.accessibility_click":
+        return await accessibility_click(_text(arguments.get("query")))
+    if name == "android.accessibility_type":
+        return await accessibility_type(_text(arguments.get("text")))
+    if name == "android.accessibility_back":
+        return await accessibility_back()
+    if name == "android.accessibility_home":
+        return await accessibility_home()
     if name == "terminal.run":
         code, output = await run_shell(_text(arguments.get("command")))
         return f"النتيجة ({code}):\n{output or 'تم التنفيذ بلا مخرجات'}"

@@ -29,6 +29,8 @@ values = {
     'ADB_SERIAL': '',
     'ADB_COMMAND_TIMEOUT': '30',
     'VERIFY_AFTER_ADB': 'true',
+    'ANDROID_ACCESS_URL': 'http://127.0.0.1:8765',
+    'ANDROID_ACCESS_TIMEOUT': '15',
 }
 lines = path.read_text(encoding='utf-8').splitlines()
 seen = set()

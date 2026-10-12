@@ -5,3 +5,7 @@ __pycache__/
 logs/
 agent.pid
 .DS_Store
+android_companion/.gradle/
+android_companion/build/
+android_companion/app/build/
+*.apk
