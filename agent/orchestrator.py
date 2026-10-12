@@ -28,7 +28,7 @@ def _write_event(event: AgentEvent) -> None:
 
 def _failure_kind(result: str) -> str | None:
     value = result.casefold()
-    if any(word in value for word in ("فشل", "خطأ", "تعذر", "غير متاح", "انتهت مهلة", "رفضت")):
+    if any(word in value for word in ("فشل", "خطأ", "تعذر", "غير متاح", "غير معروفة", "غير معروف", "انتهت مهلة", "رفضت", "استثناء")):
         if "مهلة" in value:
             return "timeout"
         if "غير متاح" in value or "adb" in value and "فشل" in value:
@@ -59,6 +59,13 @@ async def execute_plan(steps: list[dict[str, Any]], task_id: str, progress: Prog
         on_failure = str(raw.get("on_failure", "stop")).lower()
         if not tool:
             raise ValueError(f"الخطوة {index} لا تحتوي اسم أداة.")
+        if any(char in tool for char in "'\"{},") or "arguments" in tool:
+            result = "اسم الأداة مشوه؛ يجب فصل tool عن arguments في JSON."
+            _write_event(observation_event(task_id, tool, result, success=False))
+            results.append({"index": index, "tool": tool, "title": title, "success": False, "attempts": 1, "failure": "invalid_tool", "result": result})
+            if on_failure not in {"continue", "skip"}:
+                break
+            continue
 
         if progress:
             value = progress(index, total, title, "started")

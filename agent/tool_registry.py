@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 from .tools import phone_workspace, run_shell
+from .termux_tools import battery_status, notification, open_url, toast, vibrate
 from .adb_tools import (
     adb_capabilities,
     adb_devices,
@@ -108,6 +109,16 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return await adb_type(_text(arguments.get("text")))
     if name == "adb.key":
         return await adb_key(arguments.get("keycode"))
+    if name == "termux.battery":
+        return await battery_status()
+    if name == "termux.toast":
+        return await toast(_text(arguments.get("text")), bool(arguments.get("long", False)))
+    if name == "termux.notification":
+        return await notification(_text(arguments.get("title")), _text(arguments.get("content")))
+    if name == "termux.vibrate":
+        return await vibrate(arguments.get("duration_ms", 300))
+    if name == "termux.open_url":
+        return await open_url(_text(arguments.get("url")))
     if name == "terminal.run":
         code, output = await run_shell(_text(arguments.get("command")))
         return f"النتيجة ({code}):\n{output or 'تم التنفيذ بلا مخرجات'}"

@@ -26,6 +26,7 @@ ACTIVE_TASKS: dict[str, dict[str, object]] = {}
 TASK_HANDLES: dict[str, asyncio.Task] = {}
 MESSAGE_BUFFER: dict[int, list[str]] = {}
 MESSAGE_DEBOUNCE: dict[int, asyncio.Task] = {}
+FAILED_REQUESTS: dict[int, str] = {}
 
 
 def allowed(update: Update) -> bool:
@@ -177,6 +178,8 @@ async def execute_model_plan(update: Update, steps: list[dict[str, object]], tas
 
     try:
         results = await execute_plan(steps, task_id, progress)
+        if any(not bool(item["success"]) for item in results):
+            FAILED_REQUESTS[update.effective_user.id] = "أعد تنفيذ آخر مهمة فاشلة بطريقة صحيحة، واستعمل أدوات الملفات المباشرة للمحتوى الطويل، ولا تستعمل python3 -c لكتابة HTML."
         lines = []
         for item in results:
             marker = "نجحت" if item["success"] else f"فشلت ({item['failure']})"
@@ -217,7 +220,10 @@ async def approve_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def process_text(update: Update, text: str):
     if not allowed(update):
         return await deny(update)
-    add_message(update.effective_user.id, "user", text)
+    uid = update.effective_user.id
+    if text.strip().casefold() in {"نعم", "اي", "إي", "yes", "نعم حاول", "اعد المحاولة", "أعد المحاولة"} and uid in FAILED_REQUESTS:
+        text = FAILED_REQUESTS.pop(uid)
+    add_message(uid, "user", text)
     if text.startswith(("تذكر أن", "احفظ أن", "لا تنس أن")):
         add_memory(update.effective_user.id, text.split(" ", 2)[-1])
     saved_context = get_context(update.effective_user.id)
