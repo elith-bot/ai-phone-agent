@@ -32,6 +32,12 @@ README مشروع `odysseus` يذكر صراحةً أدوات shell وMCP وال
 
 ## أهم المشاريع الخارجية
 
+### 0. OpenClaw-Termux
+
+اكتُشف بعد إعداد هذا التقرير، لذلك لم يكن ضمن قائمة المشاريع المفحوصة سابقًا. يضيف OpenClaw Gateway داخل Ubuntu عبر proot-distro، وتطبيق Flutter بواجهة Setup وTerminal وDashboard وLogs وForeground Service، إضافة إلى Node capabilities للهاتف. يدعم Telegram رسميًا من خلال Gateway، لكنه لا يستبدل Accessibility العامة تلقائيًا. نستخدمه كطبقة تشغيل وواجهة، ونبقي ذاكرة SQLite وCRUD وpatch وTermux:API وADB وAccessibility الخاصة بمشروعنا خلف Skills أو Adapter محلي. [22]
+
+**ما نقتبسه:** دورة حياة Gateway، الواجهة الرسومية، Dashboard، foreground service، Node protocol، onboarding، وإدارة القنوات.
+
 ### 1. OpenHands
 
 OpenHands ممتاز كمرجع لفصل `Agent` عن `Conversation` و`Workspace`، وسجل أحداث typed من نوع Action/Observation، وضغط السياق، واستئناف الجلسة، وسجل الأدوات، وملاحظات الأمان. يدعم Local Workspace وRemote Workspace وDocker Workspace وAgent Server، لكنه لا يقدم دعمًا رسميًا لـTermux أو ADB أو التحكم بشاشة Android. تشغيله محليًا دون عزل يعطي الوكيل وصولًا واسعًا للنظام، لذلك نقتبس مبادئه ولا نجعله اعتمادًا للهاتف. [1] [2]
@@ -271,3 +277,4 @@ android.logcat
 [19]: https://developer.android.com/tools/adb "Android Debug Bridge official documentation"
 [20]: https://github.com/Genymobile/scrcpy "scrcpy repository"
 [21]: https://github.com/termux/termux-app/wiki/RUN_COMMAND-Intent "Termux RUN_COMMAND Intent"
+[22]: https://github.com/mithun50/openclaw-termux "OpenClaw-Termux repository"
